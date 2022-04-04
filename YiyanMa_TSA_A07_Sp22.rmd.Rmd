@@ -1,0 +1,300 @@
+---
+title: "ENV 790.30 - Time Series Analysis for Energy Data | Spring 2022"
+subtitle: "Assignment 7 - Due date 03/25/22"
+author: "Yiyan Ma"
+output: pdf_document
+geometry: margin=2.54cm
+header-includes:
+  - \usepackage{enumerate}
+  - \usepackage{enumitem}
+---
+
+## Directions
+
+You should open the .rmd file corresponding to this assignment on RStudio. The file is available on our class repository on Github. And to do so you will need to fork our repository and link it to your RStudio.
+
+Once you have the project open the first thing you will do is change "Student Name" on line 3 with your name. Then you will start working through the assignment by **creating code and output** that answer each question. Be sure to use this assignment document. Your report should contain the answer to each question and any plots/tables you obtained (when applicable).
+
+When you have completed the assignment, **Knit** the text and code into a single PDF file. Rename the pdf file such that it includes your first and last name (e.g., "LuanaLima_TSA_A07_Sp22.Rmd"). Submit this pdf using Sakai.
+
+## Set up
+
+```{r}
+#Load/install required package here
+library(lubridate)
+library(ggplot2)
+library(forecast)  
+#library(Kendall)
+library(tseries)
+#library(outliers)
+library(tidyverse)
+library(smooth)
+library(kableExtra)
+library(Kendall)
+library(tinytex)
+```
+
+## Importing and processing the data set
+
+Consider the data from the file "Net_generation_United_States_all_sectors_monthly.csv". The data corresponds to the monthly net generation from January 2001 to December 2020 by source and is provided by the US Energy Information and Administration. **You will work with the natural gas column only**.
+
+Packages needed for this assignment: "forecast","tseries". Do not forget to load them before running your script, since they are NOT default packages.\\
+
+### Q1
+
+Import the csv file and create a time series object for natural gas. Make you sure you specify the **start=** and **frequency=** arguments. Plot the time series over time, ACF and PACF.
+
+```{r}
+
+## load data
+gas_generation <- read.csv(
+  file="../Data/Net_generation_United_States_all_sectors_monthly.csv",
+  header=TRUE,
+  skip=4)
+
+head(gas_generation)
+nvar_gas <- ncol(gas_generation) - 1
+nobs_gas <- nrow(gas_generation)
+
+##process data
+gas_generation_processed <-
+  gas_generation %>%
+  mutate( Month = my(Month) ) %>% 
+  rename( gas.generation = natural.gas.thousand.megawatthours )
+
+##transform to TS data
+ts_gas_generation <- ts(
+  gas_generation_processed$gas.generation,
+  start=c(year(gas_generation_processed$Month[1]),month(gas_generation_processed$Month[1])),
+  frequency=12) 
+
+##plot time series, PACF and PACF
+TS_Plot_gas <- 
+  ggplot(gas_generation_processed, aes(x=Month, y=gas.generation)) +
+      geom_line()
+plot(TS_Plot_gas)
+
+par(mfrow=c(1,2))
+ACF_Plot_gas <- Acf(gas_generation_processed$gas.generation, lag = 40, plot = TRUE,main="")
+PACF_Plot_gas <- Pacf(gas_generation_processed$gas.generation, lag = 40, plot = TRUE,main="")
+par(mfrow=c(1,1))
+```
+
+### Q2
+
+Using the $decompose()$ or $stl()$ and the $seasadj()$ functions create a series without the seasonal component, i.e., a deseasonalized natural gas series. Plot the deseasonalized series over time and corresponding ACF and PACF. Compare with the plots obtained in Q1.
+
+```{r}
+##use the decompose function
+decompose_generation <- decompose(ts_gas_generation,"additive")
+plot(decompose_generation)
+
+deseasonal_generation <- seasadj(decompose_generation)
+
+##plot the deseasonalized series over time, ACF, PACF
+month=gas_generation_processed$Month
+df_deseason<-as.data.frame(cbind(month, deseasonal_generation))
+
+TS_Plot_deseason <- 
+  ggplot(df_deseason, aes(x=month, y=deseasonal_generation)) +
+      geom_line()
+plot(TS_Plot_deseason)
+
+par(mfrow=c(1,2))
+ACF_Plot_deseason <- Acf(deseasonal_generation, lag = 40, plot = TRUE,main="")
+PACF_Plot_deseason <- Pacf(deseasonal_generation, lag = 40, plot = TRUE,main="")
+par(mfrow=c(1,1))
+
+##compare the plots with Q1
+##The strong seasonal component disappeared in all three plots, after doing the seasonal adjustment using the "reasonalaj" function 
+
+```
+
+## Modeling the seasonally adjusted or deseasonalized series
+
+### Q3
+
+Run the ADF test and Mann Kendall test on the deseasonalized data from Q2. Report and explain the results.
+
+```{r}
+## ADF test 
+##Null hypothesis for the ADF is that data has a unit root
+print("Results for ADF test/n")
+print(adf.test(deseasonal_generation,alternative = "stationary"))
+##p-value is 0.01. It means that the data does not have a unit root (stochastic trend).
+##because the data does not have a unit root, no differencing is needed
+
+##mannkendall test 
+MKtest <- MannKendall(deseasonal_generation)
+print("Results for Seasonal Mann Kendall /n")
+print(summary(MKtest))
+##2-sided pvalue =pvalue =< 2.22e-16. It means that the data has deterministic trend. 
+
+##find out how many time we need to difference
+n_diff <- ndiffs(deseasonal_generation)
+cat("Number of differencing needed: ",n_diff)
+##d=1
+
+deseasonal_diff <- diff(deseasonal_generation,differences=1,lag=1)
+par(mfrow=c(1,2))
+Acf(deseasonal_diff,lag.max=40,main="Diff NonSeas gas")
+Pacf(deseasonal_diff,lag.max=40,main="Diff NonSeas gas")
+
+```
+
+### Q4
+
+Using the plots from Q2 and test results from Q3 identify the ARIMA model parameters $p,d$ and $q$. Note that in this case because you removed the seasonal component prior to identifying the model you don't need to worry about seasonal component. Clearly state your criteria and any additional function in R you might use. DO NOT use the $auto.arima()$ function. You will be evaluated on ability to can read the plots and interpret the test results.
+
+```{r}
+
+##now we observe the ACF and PACF of the differenced data to try to find out the order of the mdel
+##both the ACF and the PACF shows a slow decay, with values significant even in the much later lags. Try p=1 and q=1. From the previous ndiff function, we know that d=1
+##should also try (p=2 and q=1), (p=1 and q=2), and (p=2 and q=2), comparing teh 4 models to find which one has the ##smallest AIC
+
+```
+
+### Q5
+
+Use $Arima()$ from package "forecast" to fit an ARIMA model to your series considering the order estimated in Q4. Should you allow for constants in the model, i.e., $include.mean = TRUE$ or $include.drift=TRUE$. **Print the coefficients** in your report. Hint: use the $cat()$ function to print.
+
+```{r}
+##Try p=1, d=1,q=1
+ARIMA_model<- Arima(deseasonal_generation,order=c(1,1,1),include.drift=TRUE)
+print(ARIMA_model)
+cat("the arima model coefficient is: ",ARIMA_model$coef)
+cat("the arima model AIC is: ",ARIMA_model$aic)
+##aic=4774.213
+
+##try p=2,d=1,q=1
+ARIMA_model2<- Arima(deseasonal_generation,order=c(2,1,1),include.drift=TRUE)
+print(ARIMA_model2)
+cat("the arima model coefficient is: ",ARIMA_model2$coef)
+cat("the arima model AIC is: ",ARIMA_model2$aic)
+##aic=4776.212
+
+##try p=1,d=1,q=2
+ARIMA_model3<- Arima(deseasonal_generation,order=c(1,1,2),include.drift=TRUE)
+print(ARIMA_model2)
+cat("the arima model coefficient is: ",ARIMA_model3$coef)
+cat("the arima model AIC is: ",ARIMA_model3$aic)
+##aic=4776.2
+
+##try p=2,d=1,q=2
+ARIMA_model4<- Arima(deseasonal_generation,order=c(2,1,2),include.drift=TRUE)
+print(ARIMA_model2)
+cat("the arima model coefficient is: ",ARIMA_model4$coef)
+cat("the arima model AIC is: ",ARIMA_model4$aic)
+##aic=4774.131
+
+##comparing the 4 models by their aic, the 4th model is the best. The next question will just check the residual of this model 
+```
+
+### Q6
+
+Now plot the residuals of the ARIMA fit from Q5 along with residuals ACF and PACF on the same window. You may use the $checkresiduals()$ function to automatically generate the three plots. Do the residual series look like a white noise series? Why?
+
+```{r}
+res<-checkresiduals(ARIMA_model4)
+class(res)
+##The residuals look like a white noise, as there is no pattern shown in the time series plot
+
+par(mfrow=c(1,3))
+ts.plot(ARIMA_model4$residuals)
+Acf(ARIMA_model4$residuals,lag.max=40)
+Pacf(ARIMA_model4$residuals,lag.max=40)
+##Nearly all the residuals are within the error range in the ACF and PACF, and there is no observable patterns of the residuals 
+
+```
+
+## Modeling the original series (with seasonality)
+
+### Q7
+
+Repeat Q4-Q6 for the original series (the complete series that has the seasonal component). Note that when you model the seasonal series, you need to specify the seasonal part of the ARIMA model as well, i.e., $P$, $D$ and $Q$.
+
+```{r}
+
+##calculating D
+ns_diff_gas <- nsdiffs(ts_gas_generation)
+cat("Number of differencing needed: ",ns_diff_gas)
+##D=1
+
+##create the twice diff dataset
+gas_trend_diff <- diff(ts_gas_generation,lag =1, differences=1) #diff done on orig series
+gas_both_diff <- diff(gas_trend_diff,lag =12, differences=1)
+
+#Plot ACF and PACF for twice-differenced series - Steps 3 (order of non-seasonal) and 5 ) order of seasonal
+par(mfrow=c(1,2))
+Acf(gas_both_diff,lag.max=60,main="Twice-Differenced Residential",ylim=c(-1,1))
+Pacf(gas_both_diff,lag.max=60,main="Twice-Differenced Residential",ylim=c(-1,1))
+
+##Now we observe the ACF and PACF of the twice differenced series to try to find the order of the model. 
+##Let’s look at seasonal lags only. The ACF shows a cut off at lag 12 and the PACF shows a low decay in lag 12, 24 36….seems like P=0, Q=1. from previous nsdiffs function, we know that D=1
+
+
+##running this model:
+SARIMA_Model <- Arima(ts_gas_generation,order=c(2,1,2),seasonal=c(0,1,1),include.drift=FALSE)
+print(SARIMA_Model)
+cat("the seasonal arima model coefficient is: ",SARIMA_Model$coef)
+cat("the seasonal arima model AIC is: ",SARIMA_Model$aic)
+
+res_seasonal<-checkresiduals(SARIMA_Model)
+
+
+par(mfrow=c(1,3))
+ts.plot(SARIMA_Model$residuals)
+Acf(SARIMA_Model$residuals,lag.max=40)
+Pacf(SARIMA_Model$residuals,lag.max=40)
+##Nearly all the residuals are within the error range in the ACF and PACF, and there is no observable patterns of the residuals
+```
+
+
+### Q8
+
+Compare the residual series for Q7 and Q6. Can you tell which ARIMA model is better representing the Natural Gas Series? Is that a fair comparison? Explain your response.
+
+```{r}
+##the residuals from Q7 and Q6 both looks like white noise. ##Cannot compare the fitting parameters such as AIC between the two models, as they used different input series: one used the initial gas.generation, the other used a deseasonal data series generated by the "decomposed" function
+```
+
+
+## Checking your model with the auto.arima()
+
+**Please** do not change your answers for Q4 and Q7 after you ran the $auto.arima()$. It is **ok** if you didn't get all orders correctly. You will not loose points for not having the correct orders. The intention of the assignment is to walk you to the process and help you figure out what you did wrong (if you did anything wrong!).
+
+### Q9
+
+Use the $auto.arima()$ command on the **deseasonalized series** to let R choose the model parameter for you. What's the order of the best ARIMA model? Does it match what you specified in Q4?
+
+```{r}
+ARIMA_autofit_gas<-auto.arima(deseasonal_generation,max.D=0,max.P = 0,max.Q=0)
+print(ARIMA_autofit_gas)
+##the auto fit result is ARIMA(2,1,3) with drift
+
+par(mfrow=c(1,3))
+ts.plot(ARIMA_autofit_gas$residuals)
+Acf(ARIMA_autofit_gas$residuals,lag.max=40)
+Pacf(ARIMA_autofit_gas$residuals,lag.max=40)
+
+##the model I used is order=c(2,1,2) with drift. it is also an ARIMA model with both the AR and the MA component, but the AR order is different.
+```
+
+
+### Q10
+
+Use the $auto.arima()$ command on the **original series** to let R choose the model parameters for you. Does it match what you specified in Q7?
+
+```{r}
+SARIMA_autofit_gas <- auto.arima(ts_gas_generation)
+print(SARIMA_autofit_gas)
+##the auto arima result is ARIMA(2,0,1)(2,1,2)[12] with drift 
+
+par(mfrow=c(1,3))
+ts.plot(SARIMA_autofit_gas$residuals)
+Acf(SARIMA_autofit_gas$residuals,lag.max=40)
+Pacf(SARIMA_autofit_gas$residuals,lag.max=40)
+##the model I used is order=c(2,1,2),seasonal=c(0,1,1). My model is similar, but not exactly the same with the auto arima. 
+##in addition, it is advised that P+Q<=1. 
+```
+
