@@ -1,4 +1,4 @@
----
+ ---
 title: "ForecastCompetition"
 author: "Ben and Yiyan"
 date: "4/3/2022"
@@ -176,6 +176,8 @@ plot(ARIMA_forecast)
 ##manually explore arima
 ```{r}
 ##adf test
+deseasonal_load_09 <- na.fill(deseasonal_load_09,"extend")
+deseasonal_load_09
 adf.test(deseasonal_load_09,alternative="stationary")
 
 ##seasonal Mann-Kendall
@@ -204,11 +206,11 @@ SARIMA_forecast<-forecast::forecast(object=SARIMA_Model,h=31)
 plot(SARIMA_forecast)
 
 
-df<-cbind(load,"humidity"=humidity_daily$daily_humidity_ws1,"temp"=temp_daily$daily_temp_ws1)
+#df<-cbind(load,"humidity"=humidity_daily$daily_humidity_ws1,"temp"=temp_daily$daily_temp_ws1)
 ##SARIMA_humidity <- Arima(df[,"Daily Average"],order=c(4,1,0),seasonal=c(0,0,0),include.drift=FALSE, xreg= df[,"humidity"])
-print(SARIMA_humidity)
-SARIMA_forecast_humidity<-forecast::forecast(object=SARIMA_humidity,h=31)
-plot(SARIMA_forecast_humidity)
+#print(SARIMA_humidity)
+#SARIMA_forecast_humidity<-forecast::forecast(object=SARIMA_humidity,h=31)
+#plot(SARIMA_forecast_humidity)
 
 ```
 ### Model: ARIMA + FOURIER terms
@@ -317,6 +319,11 @@ autoplot(ts_load) +
   ylab("load") 
 
 
+
+```
+
+
+```{r}
 ##with xreg and fourier
 
 #NN_fit <- nnetar(ts_load_09,p=1,P=1)
@@ -373,5 +380,209 @@ best_model_index <- which.min(scores[,"RMSE"])
 cat("The best model by RMSE is:", row.names(scores[best_model_index,])) 
 
 print(scores)
+```
+##Finding best weather stations
+```{r}
+#Create new dataframes with daily averages for every weather station
+
+humidity_3<- humidity %>% 
+  #mutate( rh_ws1 = as.numeric(rh_ws1)) %>%  
+  mutate( Date = ymd(date)) %>% 
+  #mutate( hr = hms(Time)) %>% 
+  mutate( Year = year(date), 
+          Month = month(date), 
+          Day = day(date)) %>% 
+          #Hour = hour(Time), 
+          #Min = minute(Time)) %>% 
+  select( Date, Year, Month, Day, 3:33)
+# Select most relevant variables
+humidity_daily_2 <- humidity_3 %>% 
+  #filter( !is.na(humidity_average)) %>% 
+  group_by(Date,Year,Month,Day) %>% # here we left column with hour out to calculate daily mean
+  summarise_all(mean)
+humidity_daily_2<- humidity_daily_2[,(5:33)]
+
+temp_3<- temp %>% 
+  #mutate( rh_ws1 = as.numeric(rh_ws1)) %>%  
+  mutate( Date = ymd(date)) %>% 
+  #mutate( hr = hms(Time)) %>% 
+  mutate( Year = year(date), 
+          Month = month(date), 
+          Day = day(date)) %>% 
+          #Hour = hour(Time), 
+          #Min = minute(Time)) %>% 
+  select( Date, Year, Month, Day, 3:33)
+# Select most relevant variables
+temp_daily_2 <- temp_3 %>% 
+  #filter( !is.na(humidity_average)) %>% 
+  group_by(Date,Year,Month,Day) %>% # here we left column with hour out to calculate daily mean
+  summarise_all(mean)
+temp_daily_2<- temp_daily_2[,(5:33)]
+
+
+ts_full_humidity <- msts(humidity_daily_2, 
+                           seasonal.periods =c(7,365.25),
+                           start=c(2005,1,1))
+ts_full_temp <- msts(temp_daily_2, 
+                           seasonal.periods =c(7,365.25),
+                           start=c(2005,1,1))
+full_data <- cbind(ts_load,ts_full_humidity,ts_full_temp)
+
+# Calculate the correlation between load and each weather station
+corrmat <- cor(full_data[,1],full_data[,-1], use = "complete.obs")
+corrmat_abs <- abs(corrmat)
+corrmat_sorted <- corrmat_abs[,order(corrmat_abs[1,])]
+top_5_corr <- row.names(as.data.frame(tail(corrmat_sorted,n=5)))
+print(top_5_corr)
+
+#create matrix w fourier and 5 best correlations
+xregs_5_best <- temp_daily_2[,c(25,5,18,7,23)]
+xregs_5_best_train <- xregs_5_best[(1:nrow(fourier_mat)),]
+xregs_best_fourier<-cbind(fourier_mat,xregs_5_best_train)
+xregs_best_for<-xregs_5_best[(nrow(xregs_best_fourier)+1):(nrow(xregs_best_fourier)+31),]
+xregs_best_fourier_for<-cbind(fourier_mat_for,xregs_best_for)
+```
+##Rerunning Neural Networks with best weather stations
+```{r}
+##Run neural network with top 5 weather stations and fourier
+
+#NN_fit <- nnetar(ts_load_09,p=1,P=1)
+NN_fit3 <- nnetar(ts_load_09,p=5,P=0,xreg=xregs_best_fourier)
+
+#NN_for <- forecast(NN_fit, h=365) 
+NN_for3 <- forecast::forecast(NN_fit3, h=31,xreg=xregs_best_fourier_for)
+
+#Plot foresting results
+autoplot(NN_for3) +
+  ylab("load") 
+
+#Plot model + observed data
+autoplot(ts_load) +
+  autolayer(NN_for3, series="Neural Network w Best Xregs",PI=FALSE)+
+  ylab("load") 
+
+#Accuracy Test
+NN_scores3 <- accuracy(NN_for3$mean,ts_load_test)
+print(NN_scores3)
+```
+## Rerun for 2011
+
+```{r}
+# forecast xregs
+ARIMA_Four_fit_xreg1 <- auto.arima(xregs_5_best$t_ws25, seasonal=FALSE, lambda=0,xreg=fourier_mat_10_train)
+ARIMA_Four_fit_xreg2 <- auto.arima(xregs_5_best$t_ws5, seasonal=FALSE, lambda=0,xreg=fourier_mat_10_train)
+ARIMA_Four_fit_xreg3 <- auto.arima(xregs_5_best$t_ws18, seasonal=FALSE, lambda=0,xreg=fourier_mat_10_train)
+ARIMA_Four_fit_xreg4 <- auto.arima(xregs_5_best$t_ws7, seasonal=FALSE, lambda=0,xreg=fourier_mat_10_train)
+ARIMA_Four_fit_xreg5 <- auto.arima(xregs_5_best$t_ws23, seasonal=FALSE, lambda=0,xreg=fourier_mat_10_train)
+ARIMA_Four_fit_xreg_Ave_temp <- auto.arima(xregs_daily[,1], seasonal=FALSE, lambda=0,xreg=fourier_mat_10_train)
+ARIMA_Four_fit_xreg_Ave_humidity <- auto.arima(xregs_daily[,2], seasonal=FALSE, lambda=0,xreg=fourier_mat_10_train)
+
+#Forecast with ARIMA fit
+#also need to specify h for fourier terms
+ARIMA_Four_for_xreg1 <- forecast::forecast(ARIMA_Four_fit_xreg1, xreg=fourier_mat_10_for, h=31) 
+ARIMA_Four_for_xreg2 <- forecast::forecast(ARIMA_Four_fit_xreg2, xreg=fourier_mat_10_for, h=31) 
+ARIMA_Four_for_xreg3 <- forecast::forecast(ARIMA_Four_fit_xreg3, xreg=fourier_mat_10_for, h=31) 
+ARIMA_Four_for_xreg4 <- forecast::forecast(ARIMA_Four_fit_xreg4, xreg=fourier_mat_10_for, h=31) 
+ARIMA_Four_for_xreg5 <- forecast::forecast(ARIMA_Four_fit_xreg5, xreg=fourier_mat_10_for, h=31) 
+ARIMA_Four_for_xreg_Ave_temp <- forecast::forecast(ARIMA_Four_fit_xreg_Ave_temp, xreg=fourier_mat_10_for, h=31) 
+ARIMA_Four_for_xreg_Ave_humidity <- forecast::forecast(ARIMA_Four_fit_xreg_Ave_humidity, xreg=fourier_mat_10_for, h=31) 
+
+autoplot(ARIMA_Four_for_xreg1) + ylab("Temp")
+autoplot(ARIMA_Four_for_xreg2) + ylab("Temp")
+autoplot(ARIMA_Four_for_xreg3) + ylab("Temp")
+autoplot(ARIMA_Four_for_xreg4) + ylab("Temp")
+autoplot(ARIMA_Four_for_xreg5) + ylab("Temp")
+autoplot(ARIMA_Four_for_xreg_Ave_temp) + ylab("Temp")
+autoplot(ARIMA_Four_for_xreg_Ave_humidity) + ylab("Humidity")
+
+```
+
+```{r}
+NN_fit_xreg1 <- nnetar(xregs_5_best$t_ws25,p=1,P=0,xreg=fourier_mat_10_train)
+NN_fit_xreg2 <- nnetar(xregs_5_best$t_ws5,p=4,P=0,xreg=fourier_mat_10_train)
+NN_fit_xreg3 <- nnetar(xregs_5_best$t_ws18,p=1,P=0,xreg=fourier_mat_10_train)
+NN_fit_xreg4 <- nnetar(xregs_5_best$t_ws7,p=3,P=0,xreg=fourier_mat_10_train)
+NN_fit_xreg5 <- nnetar(xregs_5_best$t_ws23,p=1,P=0,xreg=fourier_mat_10_train)
+NN_fit_xreg_ave_temp <- nnetar(xregs_daily[,1],p=5,P=0,xreg=fourier_mat_10_train)
+NN_fit_xreg_ave_humidity <- nnetar(xregs_daily[,2],p=2,P=0,xreg=fourier_mat_10_train)
+
+NN_for_xreg1 <- forecast::forecast(NN_fit_xreg1, h=31,xreg=fourier_mat_10_for)
+NN_for_xreg2 <- forecast::forecast(NN_fit_xreg2, h=31,xreg=fourier_mat_10_for)
+NN_for_xreg3 <- forecast::forecast(NN_fit_xreg3, h=31,xreg=fourier_mat_10_for)
+NN_for_xreg4 <- forecast::forecast(NN_fit_xreg4, h=31,xreg=fourier_mat_10_for)
+NN_for_xreg5 <- forecast::forecast(NN_fit_xreg5, h=31,xreg=fourier_mat_10_for)
+NN_for_xreg_ave_temp <- forecast::forecast(NN_fit_xreg_ave_temp, h=31,xreg=fourier_mat_10_for)
+NN_for_xreg_ave_humidity <- forecast::forecast(NN_fit_xreg_ave_humidity, h=31,xreg=fourier_mat_10_for)
+
+autoplot(NN_for_xreg1) + ylab("load") 
+autoplot(NN_for_xreg2) + ylab("load") 
+autoplot(NN_for_xreg3) + ylab("load") 
+autoplot(NN_for_xreg4) + ylab("load") 
+autoplot(NN_for_xreg5) + ylab("load") 
+autoplot(NN_for_xreg_ave_temp) + ylab("load") 
+autoplot(NN_for_xreg_ave_humidity) + ylab("load") 
+
+```
+
+
+## Define fourier and xregs matrices for Jan '11 train and forecast
+```{r}
+fourier_mat_10_train <- fourier(ts_load,K=c(2,12),h=nrow(ts_load))
+fourier_mat_10_for<-fourier(ts_load,K=c(2,12),h=31)
+xregs_best_four_mat_10 <- cbind(fourier_mat_10_train,xregs_5_best)
+#NN_for <- forecast(NN_fit, h=365) 
+xreg_best_for <- cbind(NN_for_xreg1$mean,NN_for_xreg2$mean,NN_for_xreg3$mean,NN_for_xreg4$mean,NN_for_xreg5$mean)
+xreg_ave_four_10  <- cbind(fourier_mat_10, xregs_daily)
+xreg_ave_fourier_for <- cbind(fourier_mat_10_for, NN_for_xreg_ave_temp$mean,NN_for_xreg_ave_humidity$mean)
+xregs_best_fourier_for <- cbind(fourier_mat_10_for, xreg_best_for)
+```
+##Run Jan '11 ARIMA Forecasts and Export
+```{r}
+##ARIMA with fourier
+ARIMA_Four_fit_Jan11 <- auto.arima(ts_load,seasonal=FALSE,lambda=0,xreg=fourier_mat_10_train)
+ARIMA_Four_for_Jan11 <- forecast::forecast(ARIMA_Four_fit_Jan11,xreg=fourier_mat_10_for,h=31) 
+
+##ARIMA with average xregs and fourier
+ARIMA_Four_AveXreg_fit_Jan11 <- auto.arima(ts_load,seasonal=FALSE,lambda=0,xreg=xreg_ave_four_10)
+ARIMA_Four_AveXreg_for_Jan11 <- forecast::forecast(ARIMA_Four_AveXreg_fit_Jan11,xreg=xreg_ave_fourier_for,h=31) 
+
+
+##ARIMA with best xregs and fourier
+ARIMA_Four_BestXreg_fit_Jan11 <- auto.arima(ts_load,seasonal=FALSE,lambda=0,xreg=as.matrix(xregs_best_four_mat_10))
+ARIMA_Four_BestXreg_for_Jan11 <- forecast::forecast(ARIMA_Four_BestXreg_fit_Jan11,xreg=xregs_best_fourier_for,h=31) 
+
+autoplot(ARIMA_Four_for_Jan11, main="ARIMA w Fourier Jan '11 Forecast") + ylab("Load")
+autoplot(ARIMA_Four_AveXreg_for_Jan11, main="ARIMA w Fourier & Average Exogenous Variables Jan '11 Forecast") + ylab("Load")
+autoplot(ARIMA_Four_BestXreg_for_Jan11, main="ARIMA w Fourier & Best Exogenous Variables Jan '11 Forecast") + ylab("Load")
+
+write.csv(ARIMA_Four_for_Jan11$mean,"./ARIMA_Four_for_Jan11.csv", row.names = FALSE)
+write.csv(ARIMA_Four_AveXreg_for_Jan11$mean,"./ARIMA_Four_AveXreg_for_Jan11.csv", row.names = FALSE)
+write.csv(ARIMA_Four_BestXreg_for_Jan11$mean,"./ARIMA_Four_BestXreg_for_Jan11.csv", row.names = FALSE)
+```
+##Run Jan '11 Neural Network Forecasts and Export
+```{r}
+##Neural Network with Fourier
+NN_Four_fit_Jan11 <- nnetar(ts_load,p=5,P=0,xreg=fourier_mat_10_train)
+NN_Four_for_Jan11 <- forecast::forecast(NN_Four_fit_Jan11, h=31,xreg=fourier_mat_10_for)
+
+##Neural Network with Fourier and Average Xregs
+NN_Four_AveXreg_fit_Jan11 <- nnetar(ts_load,p=5,P=0,xreg=xreg_ave_four_10_train)
+NN_Four_AveXreg_for_Jan11 <- forecast::forecast(NN_Four_AveXreg_fit_Jan11, h=31,xreg=xreg_ave_fourier_for)
+
+##Neural Network with Fourier and Best Xregs
+NN_Four_BestXreg_fit_Jan11 <- nnetar(ts_load,p=5,P=0,xreg=xregs_best_four_mat_10)
+NN_Four_BestXreg_for_Jan11 <- forecast::forecast(NN_Four_BestXreg_fit_Jan11, h=31,xreg=xregs_best_fourier_for)
+
+#Plots
+autoplot(NN_Four_for_Jan11, main="Neural Network w Fourier Jan '11 Forecast") + ylab("load") 
+autoplot(NN_Four_AveXreg_for_Jan11, main="Neural Network w Fourier & Average Exogenous Variables Jan '11 Forecast") + ylab("load") 
+autoplot(NN_Four_BestXreg_for_Jan11, main="Neural Network w Fourier & Best Exogenous Variables Jan '11 Forecast") + ylab("load") 
+
+
+
+##Export
+write.csv(NN_Four_for_Jan11$mean,"./NN_Four_for_Jan11.csv", row.names = FALSE)
+write.csv(NN_Four_AveXreg_for_Jan11$mean,"./NN_Four_AveXreg_for_Jan11.csv", row.names = FALSE)
+write.csv(NN_Four_BestXreg_for_Jan11$mean,"./NN_Four_BestXreg_for_Jan11.csv", row.names = FALSE)
 ```
 
