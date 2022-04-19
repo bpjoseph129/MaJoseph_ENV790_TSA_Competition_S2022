@@ -7,6 +7,10 @@ output: pdf_document
 
 ```{r setup, include=FALSE, echo=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+options(dplyr.summarise.inform=FALSE)
+
+knitr::opts_chunk$set(echo = TRUE,tidy.opts=list(width.cutoff=80), tidy=FALSE)
+
 library(lubridate)
 library(ggplot2)
 library(forecast)  
@@ -170,6 +174,10 @@ fourier_mat_for<-fourier(ts_load_09,K=c(2,12),h=31)
 xregs_fourier<-cbind(fourier_mat,xregs_train)
 xregs_for<-xregs_daily[(nrow(xregs_fourier)+1):(nrow(xregs_fourier)+31),]
 xregs_fourier_for<-cbind(fourier_mat_for,xregs_for)
+
+
+ts_load_compare<-subset(ts_load,end=length(ts_load_09)+31)
+
 ##without exogenous regressors
 ##Fit ARIMA with fourier matrix
 ARIMA_Four_fit <- auto.arima(ts_load_09, 
@@ -202,7 +210,7 @@ ARIMA_Four_for2 <- forecast::forecast(ARIMA_Four_fit2,
 #Plot foresting results
 autoplot(ARIMA_Four_for2) + ylab("Load")
 #Plot model + observed data
-autoplot(ts_load) +
+autoplot(ts_load_compare) +
   autolayer(ARIMA_Four_for2, series="ARIMA_FOURIER_Exogenous",PI=FALSE) +
   ylab("Load")
 ```
@@ -214,7 +222,7 @@ ETS_fit <-  stlf(ts_load_09,h=31)
 #Plot foresting results
 autoplot(ETS_fit) + ylab("Load")
 #Plot model + observed data
-autoplot(ts_load) +
+autoplot(ts_load_compare) +
   autolayer(ETS_fit, series="STL + ETS",PI=FALSE) +
   ylab("Load")
 ```
@@ -229,7 +237,7 @@ TBATS_for <- forecast::forecast(TBATS_fit, h=31)
 autoplot(TBATS_for) +
   ylab("Load") 
 #Plot model + observed data
-autoplot(ts_load) +
+autoplot(ts_load_compare) +
   autolayer(TBATS_for, series="TBATS",PI=FALSE)+
   ylab("Load") 
 ```
@@ -245,7 +253,7 @@ NN_for <- forecast::forecast(NN_fit, h=31,xreg=fourier(ts_load_09, K=c(2,12),h=3
 autoplot(NN_for) +
   ylab("load") 
 #Plot model + observed data
-autoplot(ts_load) +
+autoplot(ts_load_compare) +
   autolayer(NN_for, series="Neural Network",PI=FALSE)+
   ylab("load") 
 ```
@@ -261,7 +269,7 @@ NN_for2 <- forecast::forecast(NN_fit2, h=31,xreg=xregs_fourier_for)
 autoplot(NN_for2) +
   ylab("load") 
 #Plot model + observed data
-autoplot(ts_load) +
+autoplot(ts_load_compare) +
   autolayer(NN_for2, series="Neural Network with exogenous regressors",PI=FALSE)+
   ylab("load") 
 ```

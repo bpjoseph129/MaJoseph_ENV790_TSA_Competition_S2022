@@ -301,13 +301,13 @@ More info on BATS and TBATS with corresponding equations [here](https://forecast
 
 ```{r TBATS, echo=TRUE, message=FALSE, warning=FALSE}
 # TBATS can take time to fit
-TBATS_fit <- tbats(ts_act_power_daily_train)
+TBATS_fit <- tbats(ts_load_09)
 
-TBATS_for <- forecast(TBATS_fit, h=365)
+TBATS_for <- forecast::forecast(TBATS_fit, h=31)
 
 #Plot foresting results
 autoplot(TBATS_for) +
-  ylab("Active Power") 
+  ylab("Load") 
 
 #Plot model + observed data
 autoplot(ts_act_power_daily) +

@@ -1,16 +1,15 @@
 ---
 title: "ForecastCompetition"
 author: "Ben and Yiyan"
-date: "4/3/2022"
+date: "4/13/2022"
 output: pdf_document
 ---
 
-Questions for Luana:
-- How to select all weather stations when mutating from hrly to daily
-- How to deal with the large txt file issue
-
 ```{r setup, include=FALSE, echo=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+options(dplyr.summarise.inform=FALSE)
+knitr::opts_chunk$set(echo = TRUE,tidy.opts=list(width.cutoff=80), tidy=FALSE)
+
 library(lubridate)
 library(ggplot2)
 library(forecast)  
@@ -25,14 +24,13 @@ library(kableExtra)
 
 ## Data Cleaning
 
-At this step, we cleaned the load, temperature, and humidity datasets. First we imported our datasets. Then we averaged the hourly temperature and humidity across all weather stations. Then we cleaned these datasets and hour hourly load data to return daily average temperature and humidity across all weather stations. This process resulted in the following three dataframes.
+At this step, we cleaned the load, temperature, and humidity datasets. First, we imported our datasets. Then we averaged the hourly temperature and humidity across all weather stations. Then we cleaned these datasets and hour hourly load data to return daily average temperature and humidity across all weather stations. This process resulted in the following three dataframes.
 
-##creating daily data
 ```{r read_data, warning=FALSE}
 library(readxl)
 load <- read_excel("Data/load.xlsx")
-humidity <- read_excel("Data/relative_humidity.xlsx")
 
+humidity <- read_excel("Data/relative_humidity.xlsx")
 empty_col2<-("humidity_average")
 humidity[,empty_col2]<-NA
 humidity$humidity_average<-rowMeans(humidity[,(3:30)])
@@ -42,7 +40,7 @@ empty_col3<-("temp_average")
 temp[,empty_col3]<-NA
 temp$temp_average<-rowMeans(temp[,(3:30)])
 
-#Fixing date columns and selecting active power only column
+#Separate the year, month, date using a pipe function
 humidity_2 <- humidity %>% 
   mutate( Date = ymd(date)) %>% 
   mutate( Year = year(date), 
@@ -51,30 +49,26 @@ humidity_2 <- humidity %>%
   select( Date, Year, Month, Day, humidity_average)
 
 temp_2 <- temp %>% 
-  #mutate( rh_ws1 = as.numeric(rh_ws1)) %>%  
   mutate( Date = ymd(date)) %>% 
-  #mutate( hr = hms(Time)) %>% 
   mutate( Year = year(date), 
           Month = month(date), 
           Day = day(date)) %>% 
-          #Hour = hour(Time), 
-          #Min = minute(Time)) %>% 
   select( Date, Year, Month, Day, temp_average)
 
 
-#Creating a data frame with daily observations
+#Create a data frame with daily observations
 humidity_daily <- humidity_2 %>% 
   filter( !is.na(humidity_average)) %>% 
   group_by(Date,Year,Month,Day) %>% # here we left column with hour out to calculate daily mean
   summarise( daily_humidity_average = mean(humidity_average)) 
 
 
-#Creating a data frame with daily observations
 temp_daily <- temp_2 %>% 
   filter( !is.na(temp_average)) %>% 
   group_by(Date,Year,Month,Day) %>% # here we left column with hour out to calculate daily mean
   summarise(daily_temp_average = mean(temp_average))
 
+#Create an additional column for daily averages
 empty_col <- ("Daily Average")
 load[,empty_col] <- NA
 load$`Daily Average` <- rowMeans(load[,(3:26)])
@@ -89,14 +83,12 @@ head(temp_daily, 10)
 head(humidity_daily, 10)
 ```
 
-## creating ts object and creating test and training data
-
-You can also embed plots, for example:
+## Create ts object and create test and training data
+At this step, we create time-series projects for load, temp, and humidity, with weekly and yearly seasonality. The original data are from 2005 to 2010. Then, we created a training (2005-2009) and a testing (Jan, 2010) dataset for each of the three variables. We also decomposed the load data and created the deseasonal load data.  
 
 ```{r pressure, echo=FALSE}
 
-#make load a ts object
-
+#Make variables a ts object
 ts_load <- msts(load$`Daily Average`, 
                            seasonal.periods =c(7,365.25),
                            start=c(2005,1,1))
@@ -106,125 +98,116 @@ ts_temp_daily <- msts(temp_daily$daily_temp_average,
 ts_humidity_daily <- msts(humidity_daily$daily_humidity_average,
                            seasonal.periods =c(7,365.25),
                            start=c(2005,1,1))
+
+##Create training and testing dataset 
 n_for=365
 n_jan10=31
 ts_load_09 <- subset(ts_load,end=length(ts_load)-n_for)
-##create a subset for testing purpose
 ts_load_test <- subset(ts_load,start =(length(ts_load_09)+1),end=length(ts_load_09)+n_jan10)
 
 ts_temp_daily_train<-subset(ts_temp_daily,end=length(ts_temp_daily)-n_for)
 ts_humidity_daily_train<-subset(ts_humidity_daily,end=length(ts_humidity_daily)-n_for)
-plot(ts_load_09)
-head(ts_load,15)
 
-##create a dataframe with the three variables together
+##Create a dataframe with the three variables together
 xregs_daily<-cbind(ts_temp_daily,ts_humidity_daily)
 xregs_train<-cbind(ts_temp_daily_train,ts_humidity_daily_train)
 
-##decompose
-#ts_load_09 %>% mstl() %>%
-#  autoplot()
-
+##Decompose the load data
 decompose_load_09<-mstl(ts_load_09)
 autoplot(decompose_load_09)
 deseasonal_load_09 <- seasadj(decompose_load_09) 
 
-plot(deseasonal_load_09)
-
-
+##Display output
+autoplot(ts_load_09) + ylab("Load Training data,mw")
+autoplot(deseasonal_load_09) + ylab("deseasonal load training data,mw")
 
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
-##4 simple models
+##4 Simple models
+At this step, we applied 4 simple models to the load training data to generate forecasts for Jan 2010. The 4 models are arithmetic mean on original data, arithmetic mean on deseasonal data, seasonal naïve on original data, and naïve on deseasonal data. Because these forecasting methods are very basic, they do not have very high accuracy. 
 ```{r}
-#Model 1: Arithmetic mean on original data
+#Arithmetic mean on original data
 MEAN_seas <- meanf(y = ts_load_09, h = 31)
-plot(MEAN_seas)
+autoplot(MEAN_seas)+ylab("Mean_seas, mw")
 
-#Model 2: Arithmetic mean on deseas data
+#Arithmetic mean on deseas data
 MEAN_deseas <- meanf(deseasonal_load_09, h=31)
-plot(MEAN_deseas)
+autoplot(MEAN_deseas)+ylab("MEAN_deseas,mw")
 
-#Model 3: Seasonal naive on original data
+#Seasonal naive on original data
 SNAIVE_seas <- snaive(ts_load_09, h=31)
-plot(SNAIVE_seas)
+autoplot(SNAIVE_seas)+ylab("SNAIVE_seas,mw")
 
-#Model 4: Naive on deseas data
+#Naive on deseas data
 NAIVE_deseas <- naive(deseasonal_load_09, h=31)
-plot(NAIVE_deseas)
+autoplot(NAIVE_deseas)+ylab("NAIVE_deseas,mw")
 ```
-##auto seasonal arima
+##Manually explore ARIMA
+At this step, we first ran the ADF test, the p-value is less than 0.01, implying that there is no unit root. Then, we ran the seasonal Mann-Kendall test, 2-sided p-value =8.6608e-12, implying that there is a trend in the series.
+To manually explore ARIMA model, we first ran the n_diff function, differenced the series accordingly, and created ACF and PACF for the differenced data. When looking at the first 12 lags for ACF and PACF, we see the ACF shows a slow decay and PACF shows a cutoff at lag 4. Indicating p=4,q=0, and we know that d=1. There are no significant lags at 12, 24… in ACF and PACF, thus it has no seasonal components in the seasonal ARIMA model. The model we used is (4,1,0)(0,0,0). The output is a forecast using this model.
+
 ```{r}
-##auto seasonal arima
-# Model 5:  SARIMA on original data
+##adf test
+deseasonal_load_09 <- na.fill(deseasonal_load_09,"extend")
+adf.test(deseasonal_load_09,alternative="stationary")
+
+##seasonal Mann-Kendall test
+SeasonalMannKendall(deseasonal_load_09)
+
+#Use n_diff to find out the number of differencing needed
+n_diff_trend <- ndiffs(deseasonal_load_09)
+cat("Number of differencing needed: ",n_diff_trend)
+##d=1
+ns_diff_seasonal <- nsdiffs(ts_load_09)
+cat("Number of seasonal differencing needed: ",ns_diff_seasonal)
+##D=0
+ts_load_09_diff <- diff(ts_load_09,lag =1, differences=1) 
+
+##Create ACF and PACF
+par(mfrow=c(1,2))
+Acf(ts_load_09_diff,lag.max=60,main="Differenced Load",ylim=c(-1,1))
+Pacf(ts_load_09_diff,lag.max=60,main="Differenced Load",ylim=c(-1,1))
+
+##Forecast using manual sarima model 
+SARIMA_Model <- Arima(ts_load_09,order=c(4,1,0),seasonal=c(0,0,0),include.drift=FALSE)
+print(SARIMA_Model)
+SARIMA_forecast<-forecast::forecast(object=SARIMA_Model,h=31)
+autoplot(SARIMA_forecast)+ylab("maually created SARIMA_forecast,mw")
+
+```
+
+##Auto ARIMA
+We ran the auto ARIMA function on our time series load data. We ran A Seasonal ARIMA model on the original load data, obtaining a model of ARIMA (5,0,0) and no seasonal component. The AIC score is 27905.49. we also ran an ARIMA model on the deseasonal data, obtaining a model of ARIMA (1,1,1) and an AIC of 27334.23. Surprisingly, the order of the non-seasonal components between the two models is quite different. Because these two models ran on two different series, their AICs are not directly comparable.
+```{r,warning=FALSE}
+# Model:  SARIMA on original data
 SARIMA_autofit <- auto.arima(ts_load_09)
 print(SARIMA_autofit)
 
 SARIMA_forecast <- forecast::forecast(object = SARIMA_autofit, h = 31)
 plot(SARIMA_forecast)
 
-# Model 6:  ARIMA on deseasonal data
+# Model:  ARIMA on deseasonal data
 ARIMA_autofit <- auto.arima(deseasonal_load_09, max.D = 0, max.P = 0, max.Q = 0)
 print(ARIMA_autofit)
 
 ARIMA_forecast <- forecast::forecast(object = ARIMA_autofit, h = 31)
 plot(ARIMA_forecast)
 ```
-##manually explore arima
-```{r}
-##adf test
-deseasonal_load_09 <- na.fill(deseasonal_load_09,"extend")
-deseasonal_load_09
-adf.test(deseasonal_load_09,alternative="stationary")
+##ARIMA + FOURIER terms
+In this section, we ran an ARIMA model with fourier terms and an ARIMA model with fourier terms and the exogenous regressors. We first created a matrix with the fourier terms and a matrix with fouier terms and the exogenous variables. The training period is used to fit the ARIMA model and the testing period is used to forecast the ARIMA model. Lastly, we plotted the forecast results and compared them with the observed data.
+```{r,warning=FALSE}
 
-##seasonal Mann-Kendall
-SeasonalMannKendall(deseasonal_load_09)
-
-##manually explore arima
-n_diff_trend <- ndiffs(deseasonal_load_09)
-cat("Number of differencing needed: ",n_diff_trend)
-##d=1
-
-ns_diff_seasonal <- nsdiffs(ts_load_09)
-cat("Number of seasonal differencing needed: ",ns_diff_seasonal)
-##D=0
-
-ts_load_09_diff <- diff(ts_load_09,lag =1, differences=1) 
-
-par(mfrow=c(1,2))
-Acf(ts_load_09_diff,lag.max=60,main="Differenced Load",ylim=c(-1,1))
-Pacf(ts_load_09_diff,lag.max=60,main="Differenced Load",ylim=c(-1,1))
-
-#Look at the differenced series to identify model order. We look at the first 12 lags for ACF and PACF, we see ACF shows a slow decay and PACF shows a cutoff at lag 4. Indicating p=4,q=0, and we know that d=1. There is now significant lags at 12, 24… in ACF and PACF, thus it has no seasonal components in the seasonal arima model. 
-
-SARIMA_Model <- Arima(ts_load_09,order=c(4,1,0),seasonal=c(0,0,0),include.drift=FALSE)
-print(SARIMA_Model)
-SARIMA_forecast<-forecast::forecast(object=SARIMA_Model,h=31)
-plot(SARIMA_forecast)
-
-
-#df<-cbind(load,"humidity"=humidity_daily$daily_humidity_ws1,"temp"=temp_daily$daily_temp_ws1)
-##SARIMA_humidity <- Arima(df[,"Daily Average"],order=c(4,1,0),seasonal=c(0,0,0),include.drift=FALSE, xreg= df[,"humidity"])
-#print(SARIMA_humidity)
-#SARIMA_forecast_humidity<-forecast::forecast(object=SARIMA_humidity,h=31)
-#plot(SARIMA_forecast_humidity)
-
-```
-### Model: ARIMA + FOURIER terms
-```{r}
-#Fit arima model with fourier terms as exogenous regressors
-# seasonal = FALSE is the same as P=D=Q=0
-# play with K by changing it to K=c(2,2), K=c(2,4), K=c(2,6), etc. The higher the K the longer it will take to converge, because R will try more models.
-
-##without xreg
-
+##Create a matrix of just the fourier terms and a matrix with the fourier terms and the exogenous regressors. 
 fourier_mat<-fourier(ts_load_09,K=c(2,12),h=nrow(ts_load_09))
 fourier_mat_for<-fourier(ts_load_09,K=c(2,12),h=31)
 xregs_fourier<-cbind(fourier_mat,xregs_train)
 xregs_for<-xregs_daily[(nrow(xregs_fourier)+1):(nrow(xregs_fourier)+31),]
 xregs_fourier_for<-cbind(fourier_mat_for,xregs_for)
-  
+
+ts_load_compare<-subset(ts_load,end=length(ts_load_09)+31)
+
+##without exogenous regressors
+##Fit ARIMA with fourier matrix
 ARIMA_Four_fit <- auto.arima(ts_load_09, 
                              seasonal=FALSE, 
                              lambda=0,
@@ -232,7 +215,6 @@ ARIMA_Four_fit <- auto.arima(ts_load_09,
                              )
 
 #Forecast with ARIMA fit
-#also need to specify h for fourier terms
 ARIMA_Four_for <- forecast::forecast(ARIMA_Four_fit,
                            xreg=fourier_mat_for,
                            h=31
@@ -241,11 +223,11 @@ ARIMA_Four_for <- forecast::forecast(ARIMA_Four_fit,
 autoplot(ARIMA_Four_for) + ylab("Load")
 
 #Plot model + observed data
-autoplot(ts_load) +
+autoplot(ts_load_compare) +
   autolayer(ARIMA_Four_for, series="ARIMA_FOURIER",PI=FALSE) +
   ylab("Load")
 
-##with xregs and fourier
+##with exogenous regressors 
 ARIMA_Four_fit2 <- auto.arima(ts_load_09, 
                              seasonal=FALSE, 
                              lambda=0,
@@ -253,7 +235,6 @@ ARIMA_Four_fit2 <- auto.arima(ts_load_09,
                              )
 
 #Forecast with ARIMA fit
-#also need to specify h for fourier terms
 ARIMA_Four_for2 <- forecast::forecast(ARIMA_Four_fit2,
                                      xreg=xregs_fourier_for,
                            h=31
@@ -262,14 +243,14 @@ ARIMA_Four_for2 <- forecast::forecast(ARIMA_Four_fit2,
 autoplot(ARIMA_Four_for2) + ylab("Load")
 
 #Plot model + observed data
-autoplot(ts_load) +
-  autolayer(ARIMA_Four_for2, series="ARIMA_FOURIER",PI=FALSE) +
+autoplot(ts_load_compare) +
+  autolayer(ARIMA_Four_for2, series="ARIMA_FOURIER_Exogenous",PI=FALSE) +
   ylab("Load")
 
 ```
-##ETS model
-
-```{r}
+##ETS Model
+In this section, we fit and forecast the load data using the STL+ETS model, plotted the forecast results, and compared it with the observed data
+```{r,warning=FALSE}
 #Fit and forecast STL + ETS model to data
 ETS_fit <-  stlf(ts_load_09,h=31)
 
@@ -277,15 +258,17 @@ ETS_fit <-  stlf(ts_load_09,h=31)
 autoplot(ETS_fit) + ylab("Load")
 
 #Plot model + observed data
-autoplot(ts_load) +
+autoplot(ts_load_compare) +
   autolayer(ETS_fit, series="STL + ETS",PI=FALSE) +
   ylab("Load")
 ```
-##TBATS
-```{r}
+
+##TBATS Model
+In this section, we fit and forecast the load data using the TBATS model, plotted the forecast results, and compared it with the observed data
+```{r,warning=FALSE}
 # TBATS can take time to fit
-na.fill(ts_load_09, "extend")
 TBATS_fit <- tbats(ts_load_09)
+
 TBATS_for <- forecast::forecast(TBATS_fit, h=31)
 
 #Plot foresting results
@@ -293,18 +276,18 @@ autoplot(TBATS_for) +
   ylab("Load") 
 
 #Plot model + observed data
-autoplot(ts_load) +
+autoplot(ts_load_compare) +
   autolayer(TBATS_for, series="TBATS",PI=FALSE)+
   ylab("Load") 
-
 ```
-##neural network
 
-```{r}
-#NN_fit <- nnetar(ts_load_09,p=1,P=1)
+##Neural Network
+Similar analysis was conducted using the Neural Network model. We used P=5 from the auto ARIMA model. We also ran a model of a Neural Network with exogenous regressors and fourier terms.  
+```{r,warning=FALSE}
+#NN_fit 
 NN_fit <- nnetar(ts_load_09,p=5,P=0,xreg=fourier(ts_load_09, K=c(2,12)))
 
-#NN_for <- forecast(NN_fit, h=365) 
+#NN_for 
 NN_for <- forecast::forecast(NN_fit, h=31,xreg=fourier(ts_load_09, K=c(2,12),h=31))
 
 #Plot foresting results
@@ -312,22 +295,20 @@ autoplot(NN_for) +
   ylab("load") 
 
 #Plot model + observed data
-autoplot(ts_load) +
+autoplot(ts_load_compare) +
   autolayer(NN_for, series="Neural Network",PI=FALSE)+
   ylab("load") 
-
-
 
 ```
 
 
-```{r}
-##with xreg and fourier
+```{r,warning=FALSE}
+##with exogenous regressors and fourier
 
-#NN_fit <- nnetar(ts_load_09,p=1,P=1)
+#NN_fit
 NN_fit2 <- nnetar(ts_load_09,p=5,P=0,xreg=xregs_fourier)
 
-#NN_for <- forecast(NN_fit, h=365) 
+#NN_for 
 NN_for2 <- forecast::forecast(NN_fit2, h=31,xreg=xregs_fourier_for)
 
 #Plot foresting results
@@ -335,12 +316,13 @@ autoplot(NN_for2) +
   ylab("load") 
 
 #Plot model + observed data
-autoplot(ts_load) +
-  autolayer(NN_for2, series="Neural Network",PI=FALSE)+
+autoplot(ts_load_compare) +
+  autolayer(NN_for2, series="Neural Network with exogenous regressors",PI=FALSE)+
   ylab("load") 
 ```
-##check accuracy
 
+##Check Accuracy
+In this section, we checked the accuracy scores for our models to compare the performance of our models. We ran 6 models in total. 
 ```{r}
 #Model 1: STL + ETS
 ETS_scores <- accuracy(ETS_fit$mean,ts_load_test)  
@@ -356,6 +338,7 @@ TBATS_scores <- accuracy(TBATS_for$mean,ts_load_test)
 NN_scores <- accuracy(NN_for$mean,ts_load_test)
 NN_scores2 <- accuracy(NN_for2$mean,ts_load_test)
 ```
+
 ## Check Residuals
 
 We then plotted the residuals of our models to check for any sort of bias. A model that accurately captures trend and seasonality should look like uniform white noise. We see evidence of seasonality in STL+ETS, ARIMA+Fourier, and Neural Networks as error bars in these residual plots increase during winter months and decrease during summer months. The addition of Xregs in the latter two models seems to eliminate the seasonality and leaves residuals that are closer to true white noise.
@@ -473,12 +456,27 @@ ts.plot(NN_fit3$residuals, main="Neural Networks + Best Xregs Residuals")
 NN_scores3 <- accuracy(NN_for3$mean,ts_load_test)
 print(NN_scores3)
 ```
+
+## Define Fourier and Xregs Matrices for Jan '11 Train and Forecast
+
+Then we generated training and forecasting matrices of our fourier terms and exogenous regressors.
+
+```{r four_xreg_mats, warning=FALSE}
+fourier_mat_10_train <- fourier(ts_load,K=c(2,12),h=nrow(ts_load))
+fourier_mat_10_for<-fourier(ts_load,K=c(2,12),h=31)
+xregs_best_four_mat_10 <- cbind(fourier_mat_10_train,xregs_5_best)
+xreg_best_for <- cbind(NN_for_xreg1$mean,NN_for_xreg2$mean,NN_for_xreg3$mean,NN_for_xreg4$mean,NN_for_xreg5$mean)
+xreg_ave_four_10  <- cbind(fourier_mat_10, xregs_daily)
+xreg_ave_fourier_for <- cbind(fourier_mat_10_for, NN_for_xreg_ave_temp$mean,NN_for_xreg_ave_humidity$mean)
+xregs_best_fourier_for <- cbind(fourier_mat_10_for, xreg_best_for)
+```
+
 ## Forecast Xregs for Use in Load Forecast
 
 We then forecasted our exogenous variables so we could use them to forecast the load for January 2011. We first utilized auto.arima models to forecast each of our 5 most correlated temperature variables with load and then our average temperature and humidity across alll weather stations. The plots of these forecasts are shown below.
 
 ```{r arima_xreg_forecast, warning=FALSE}
-# forecast xregs
+## forecast xregs
 ARIMA_Four_fit_xreg1 <- auto.arima(xregs_5_best$t_ws25, seasonal=FALSE, lambda=0,xreg=fourier_mat_10_train)
 ARIMA_Four_fit_xreg2 <- auto.arima(xregs_5_best$t_ws5, seasonal=FALSE, lambda=0,xreg=fourier_mat_10_train)
 ARIMA_Four_fit_xreg3 <- auto.arima(xregs_5_best$t_ws18, seasonal=FALSE, lambda=0,xreg=fourier_mat_10_train)
@@ -541,19 +539,6 @@ autoplot(NN_for_xreg_ave_humidity) + ylab("load")
 
 ```
 
-## Define Fourier and Xregs Matrices for Jan '11 Train and Forecast
-
-Then we generated training and forecasting matrices of our fourier terms and exogenous regressors.
-
-```{r four_xreg_mats, warning=FALSE}
-fourier_mat_10_train <- fourier(ts_load,K=c(2,12),h=nrow(ts_load))
-fourier_mat_10_for<-fourier(ts_load,K=c(2,12),h=31)
-xregs_best_four_mat_10 <- cbind(fourier_mat_10_train,xregs_5_best)
-xreg_best_for <- cbind(NN_for_xreg1$mean,NN_for_xreg2$mean,NN_for_xreg3$mean,NN_for_xreg4$mean,NN_for_xreg5$mean)
-xreg_ave_four_10  <- cbind(fourier_mat_10, xregs_daily)
-xreg_ave_fourier_for <- cbind(fourier_mat_10_for, NN_for_xreg_ave_temp$mean,NN_for_xreg_ave_humidity$mean)
-xregs_best_fourier_for <- cbind(fourier_mat_10_for, xreg_best_for)
-```
 
 ## Run Jan '11 ARIMA Forecasts and Export
 
